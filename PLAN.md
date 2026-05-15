@@ -9,8 +9,10 @@ Ce document détaille les étapes pour transformer le prototype en un moteur de 
    - [x] Migrer tous les tests vers `doctest` (Math, Memory, Threads, Engine).
    - [x] Activer les Sanitizers (`ASan`, `TSan`, `UBSan`) dans le build de développement.
 2. **Refactoring Core**
-    - Extraire la logique de `main.cpp` vers une classe `Engine`.
-    - Créer un `Input Manager` (clavier/souris) robuste.
+   - [x] Extraire la logique de `main.cpp` vers une classe `Engine`.
+   - [x] Créer un `Input Manager` (clavier/souris) robuste.
+   - [x] Restructurer le projet (Dossiers `engine/` et `examples/`).
+   - [x] Transformer `Engine` en classe de base abstraite.
 3. **Boucle de Jeu (Game Loop)**
    - Implémenter la gestion du temps (Delta Time) avec *fixed time step* pour la physique.
 

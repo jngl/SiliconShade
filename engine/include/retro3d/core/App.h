@@ -3,6 +3,7 @@
 
 #include <retro3d/core/Memory.h>
 #include <retro3d/core/ThreadPool.h>
+#include <retro3d/core/Input.h>
 #include <memory>
 #include <cstdint>
 
@@ -26,7 +27,7 @@ public:
     bool is_running() const { return m_is_running; }
     void stop() { m_is_running = false; }
 
-    void process_input();
+    void process_input(Input& input);
     void send_framebuffer();
 
     View<uint32_t> color_buffer;

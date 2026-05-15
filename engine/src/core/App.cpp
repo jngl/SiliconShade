@@ -51,17 +51,38 @@ App::~App() {
     SDL_Quit();
 }
 
-void App::process_input() {
+void App::process_input(Input& input) {
+    input.clear_frame_data();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             m_is_running = false;
         }
-        if (event.type == SDL_KEYDOWN) {
-            if (event.key.keysym.sym == SDLK_ESCAPE) {
-                m_is_running = false;
+        
+        if (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) {
+            bool pressed = (event.type == SDL_KEYDOWN);
+            switch (event.key.keysym.sym) {
+                case SDLK_w: input.set_key_state(Input::K_W, pressed); break;
+                case SDLK_a: input.set_key_state(Input::K_A, pressed); break;
+                case SDLK_s: input.set_key_state(Input::K_S, pressed); break;
+                case SDLK_d: input.set_key_state(Input::K_D, pressed); break;
+                case SDLK_UP: input.set_key_state(Input::K_UP, pressed); break;
+                case SDLK_DOWN: input.set_key_state(Input::K_DOWN, pressed); break;
+                case SDLK_LEFT: input.set_key_state(Input::K_LEFT, pressed); break;
+                case SDLK_RIGHT: input.set_key_state(Input::K_RIGHT, pressed); break;
+                case SDLK_ESCAPE: input.set_key_state(Input::K_ESCAPE, pressed); break;
+                case SDLK_SPACE: input.set_key_state(Input::K_SPACE, pressed); break;
             }
         }
+
+        if (event.type == SDL_MOUSEMOTION) {
+            input.set_mouse_pos(event.motion.x, event.motion.y);
+            input.set_mouse_relative(event.motion.xrel, event.motion.yrel);
+        }
+    }
+    
+    if (input.is_key_down(Input::K_ESCAPE)) {
+        m_is_running = false;
     }
 }
 
