@@ -15,8 +15,11 @@ ThreadPool::ThreadPool(uint32_t num_threads) {
                     this->tasks.pop();
                 }
                 task();
-                active_tasks--;
-                wait_condition.notify_one();
+                {
+                    std::lock_guard<std::mutex> lock(this->queue_mutex);
+                    active_tasks--;
+                }
+                wait_condition.notify_all();
             }
         });
     }

@@ -25,8 +25,8 @@ int main() {
     App app(app_arena);
     if (!app.init_success()) return 1;
 
-    const char* model_path = "chest.obj";
-    const char* tex_path = "Dungeons_Texture_01.png";
+    const char* model_path = "assets/chest/Chest.obj";
+    const char* tex_path = "assets/chest/texture.png";
 
     Model model;
     if (!model.load(model_path)) {
@@ -55,7 +55,7 @@ int main() {
         draw_clear_depth_buffer(app.depth_buffer, 0);
 
         Mat4 model_mat = Mat4::rotate_y(rotation);
-        rotation += 0.01f;
+        rotation += 0.0001f;
 
         for (const auto& mesh : model.get_meshes()) {
             vertex_cache.resize(mesh.vertices.size());
@@ -74,8 +74,8 @@ int main() {
                 out.position.x <<= Rasterizer::SUBPIXEL_SHIFT;
                 out.position.y <<= Rasterizer::SUBPIXEL_SHIFT;
                 out.inv_w = (int32_t)((1.0f / view_p.z) * (1 << 24));
-                out.varying.u_pw = (int32_t)(((int64_t)(v.texcoord.x * 65536.0f) * out.inv_w) >> 16);
-                out.varying.v_pw = (int32_t)(((int64_t)(v.texcoord.y * 65536.0f) * out.inv_w) >> 16);
+                out.varying.u_pw = (int32_t)((v.texcoord.x * (float)out.inv_w));
+                out.varying.v_pw = (int32_t)((v.texcoord.y * (float)out.inv_w));
             }
 
             for (size_t i = 0; i < mesh.indices.size(); i += 3) {
@@ -120,10 +120,7 @@ int main() {
                     int final_mask = mask & _mm256_movemask_ps(_mm256_castsi256_ps(v_depth_mask));
                     if (final_mask == 0) return;
 
-                    // Perspective-correct interpolation of UVs
-                    // w = 1.0 / inv_w (using 1 << 24 scaling)
-                    __m256 v_w = _mm256_div_ps(_mm256_set1_ps(16777216.0f), v_inv_w);
-                    
+                    // perspective-correct interpolation of UVs
                     __m256 v_u_pw0 = _mm256_set1_ps((float)v0.varying.u_pw);
                     __m256 v_u_pw1 = _mm256_set1_ps((float)v1.varying.u_pw);
                     __m256 v_u_pw2 = _mm256_set1_ps((float)v2.varying.u_pw);
@@ -136,8 +133,8 @@ int main() {
                     __m256 v_v_pw = _mm256_add_ps(_mm256_mul_ps(v_v_pw0, b0), 
                                     _mm256_add_ps(_mm256_mul_ps(v_v_pw1, b1), _mm256_mul_ps(v_v_pw2, b2)));
 
-                    __m256 v_u = _mm256_mul_ps(_mm256_mul_ps(v_u_pw, v_w), _mm256_set1_ps(1.0f / 65536.0f));
-                    __m256 v_v = _mm256_mul_ps(_mm256_mul_ps(v_v_pw, v_w), _mm256_set1_ps(1.0f / 65536.0f));
+                    __m256 v_u = _mm256_div_ps(v_u_pw, v_inv_w);
+                    __m256 v_v = _mm256_div_ps(v_v_pw, v_inv_w);
 
                     __m256i v_colors = texture.sample8(v_u, v_v);
 

@@ -8,6 +8,19 @@ Texture::Texture(const char* path) {
     data = stbi_load(path, &width, &height, &channels, 4);
     if (data) {
         std::cout << "Texture chargée : " << path << " (" << width << "x" << height << ")" << std::endl;
+        
+        // Swizzle RGBA to ARGB to match SDL_PIXELFORMAT_ARGB8888
+        // RGBA: [R, G, B, A] -> ARGB: [A, R, G, B]
+        // On little-endian, uint32_t 0xAARRGGBB corresponds to bytes [BB, GG, RR, AA]
+        // stb_load with 4 channels returns bytes [RR, GG, BB, AA]
+        uint32_t* p = reinterpret_cast<uint32_t*>(data);
+        for (int i = 0; i < width * height; ++i) {
+            uint8_t r = (p[i] >> 0) & 0xFF;
+            uint8_t g = (p[i] >> 8) & 0xFF;
+            uint8_t b = (p[i] >> 16) & 0xFF;
+            uint8_t a = (p[i] >> 24) & 0xFF;
+            p[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
     } else {
         std::cerr << "ERREUR : Impossible de charger " << path << std::endl;
     }
