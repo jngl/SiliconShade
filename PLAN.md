@@ -8,11 +8,11 @@ Ce document détaille les étapes pour transformer le prototype en un moteur de 
 1. **Framework de Test & Sanitizers**
    - [x] Migrer tous les tests vers `doctest` (Math, Memory, Threads, Engine).
    - [x] Activer les Sanitizers (`ASan`, `TSan`, `UBSan`) dans le build de développement.
-2. **Boucle de Jeu (Game Loop)**
+2. **Refactoring Core**
+    - Extraire la logique de `main.cpp` vers une classe `Engine`.
+    - Créer un `Input Manager` (clavier/souris) robuste.
+3. **Boucle de Jeu (Game Loop)**
    - Implémenter la gestion du temps (Delta Time) avec *fixed time step* pour la physique.
-3. **Refactoring Core**
-   - Extraire la logique de `main.cpp` vers une classe `Engine`.
-   - Créer un `Input Manager` (clavier/souris) robuste.
 
 ## Phase 2 : Rendu, Caméra & Validation Visuelle
 *Objectif : Assurer la fidélité du rendu et la fluidité des déplacements.*
