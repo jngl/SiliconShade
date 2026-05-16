@@ -1,1 +1,2 @@
 add_subdirectory(chest_viewer)
+add_subdirectory(crypt_crawler)
