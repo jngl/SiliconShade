@@ -100,8 +100,16 @@ bool Model::load(const char* path) {
     }
 
     center = (min_v + max_v) * 0.5f;
-    Vec3f size = max_v - min_v;
-    radius = std::max({size.x, size.y, size.z});
+
+    float max_dist_sq = 0.0f;
+    for (const auto& mesh : meshes) {
+        for (const auto& vertex : mesh.vertices) {
+            Vec3f d = vertex.position - center;
+            float dist_sq = d.x * d.x + d.y * d.y + d.z * d.z;
+            if (dist_sq > max_dist_sq) max_dist_sq = dist_sq;
+        }
+    }
+    radius = std::sqrt(max_dist_sq);
 
     std::cout << "Modèle chargé : " << path << " (" << meshes.size() << " meshes)" << std::endl;
     return true;

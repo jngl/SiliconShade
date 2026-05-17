@@ -83,7 +83,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-05: Fix `Model::get_bounding_sphere_radius` — returns a diameter, not a radius**
+- [x] **FIX-05: Fix `Model::get_bounding_sphere_radius` — returns a diameter, not a radius**
 
   **File:** `engine/src/render/Model.cpp:103-104`  
   **Source:** `doc/test_audit.md` Bug 4
