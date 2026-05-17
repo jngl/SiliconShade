@@ -1,6 +1,6 @@
 # Retro3D — Consolidated Task List
 
-**Generated:** 2026-05-17  
+**Generated:** 2026-05-17 (updated)  
 **Sources:** `PLAN.md`, `GEMINI.md`, `doc/test_audit.md`, `doc/architecture_audit.md`
 
 Each task carries a prerequisite chain. Work top-to-bottom within each section.
@@ -16,130 +16,62 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [x] **FIX-01: Harden Arena overflow guard for Release builds**
+- [ ] **FIX-09: Add left-boundary pixel mask in Rasterizer tile x-loop**
 
-  **File:** `engine/include/retro3d/core/Memory.h:69`  
-  **Source:** `doc/test_audit.md` Bug 2 / `doc/architecture_audit.md` Rec 8
+  **File:** `engine/include/retro3d/render/Rasterizer.h:100, 138–140`  
+  **Source:** `doc/test_audit.md` Bug 2 / `doc/architecture_audit.md` §2.2 Issue 4 / Risk 7 / Rec 8
 
-  - Replace `assert(current + padding + size <= memory_bloc.size)` with an unconditional
-    `std::fprintf` + `std::abort()` block that survives `-DNDEBUG`.
-  - The replacement guard must print the requested size and remaining capacity before aborting.
-  - Add a test in `tests/test_memory.cpp` that triggers overflow and verifies the abort path
-    (use `REQUIRE_THROWS` or a death-test wrapper).
+  - The tile x-loop starts at `min_x & ~(TILE_SIZE - 1)`, rounding down to the nearest tile
+    boundary. A right-boundary mask is applied when `tx + 7 > max_x` (line 138), but no
+    equivalent left-boundary mask is applied when `tx < min_x`. For a triangle whose leftmost
+    vertex is inside the screen AABB but whose tile starts to the left of it, the fragment
+    shader can be invoked with `x < screen_aabb.min.x`, writing to an out-of-bounds buffer
+    position.
+  - Add the left-boundary mask symmetrically to the existing right-boundary mask:
+    ```cpp
+    if (tx < min_x) {
+        int left_mask = ~((1 << (min_x - tx)) - 1) & 0xFF;
+        mask &= left_mask;
+    }
+    ```
+  - Extend the AABB Clipping test in `tests/test_engine.cpp` to assert that **zero** pixels
+    are written outside the clip region (not merely that the expected count is written inside).
 
-  **Why it matters:** In Release builds the assert is stripped. Any over-allocation silently
-  writes past the backing buffer — undefined behavior that corrupts the heap with no diagnostic.  
+  **Why it matters:** Without the left-boundary mask, out-of-bounds buffer writes occur whenever
+  the first tile of a row starts to the left of `screen_aabb.min.x`. The existing AABB Clipping
+  test does not detect this because it only counts pixels inside the region.  
   **Prerequisites:** None.
 
 ---
 
-- [x] **FIX-02: Fix `is_color_near` signed/unsigned subtraction in test helper**
+- [ ] **FIX-10: Fix `Texture` destructor allocation mismatch**
 
-  **File:** `tests/test_engine.cpp:16`  
-  **Source:** `doc/test_audit.md` Bug 7
+  **File:** `engine/src/render/Texture.cpp`  
+  **Source:** `doc/architecture_audit.md` §2.3 / Rec 9 / `doc/test_audit.md` Bug 1
 
-  - Cast both `uint8_t` operands to `int` before subtraction:
-    `std::abs((int)br - (int)r) <= tolerance`.
-  - Verify that the Depth Buffer and AABB Clipping test cases now catch previously silently
-    passing wrong values by running the tests before and after the fix.
+  - The file-load constructor allocates `data` via `stbi_load` (internally `malloc`). The
+    in-memory constructor (`Texture(const unsigned char*, int, int)`, added in FIX-06)
+    allocates with `std::malloc`. The destructor calls `stbi_image_free(data)` unconditionally.
+  - This is safe as long as the default stb allocator is never overridden, but if a
+    project-wide custom `STBI_MALLOC` / `STBI_FREE` is ever defined, the in-memory path will
+    call the wrong deallocator, causing heap corruption.
+  - Add a `bool m_owns_stbi` member (or a `free_fn` function pointer) to `Texture`, set it
+    appropriately in each constructor, and update the destructor to call the matching
+    deallocator:
+    ```cpp
+    Texture::~Texture() {
+        if (data) {
+            if (m_owns_stbi) stbi_image_free(data);
+            else std::free(data);
+        }
+    }
+    ```
+  - Add a test that constructs a texture via the in-memory constructor and destroys it, verifying
+    no crash occurs under ASan even when a custom `STBI_FREE` is simulated.
 
-  **Why it matters:** `std::abs` on an unsigned value is a no-op; comparisons in existing test
-  cases silently pass incorrect pixel values, masking real rasterizer bugs.  
-  **Prerequisites:** None.
-
----
-
-- [x] **FIX-03: Make `ThreadPool::stop` atomic**
-
-  **File:** `engine/src/core/ThreadPool.cpp`, `engine/include/retro3d/core/ThreadPool.h:30`  
-  **Source:** `doc/test_audit.md` Bug 1
-
-  - Change `bool stop = false` to `std::atomic<bool> stop{false}`.
-  - Use `memory_order_release` on the write and `memory_order_acquire` on the read inside
-    the condition-variable predicate.
-  - Run the thread tests under TSan (`-fsanitize=thread`) to confirm the race is gone.
-
-  **Why it matters:** The unsynchronized write/read of `stop` is a real data race. TSan flags it;
-  the thread pool destructor is undefined behaviour in the current implementation.  
-  **Prerequisites:** None.
-
----
-
-- [x] **FIX-04: Fix `ThreadPool::wait_all` mixed synchronization invariant**
-
-  **File:** `engine/src/core/ThreadPool.cpp:16-22, 48-53`  
-  **Source:** `doc/test_audit.md` Bug 3
-
-  - Ensure `active_tasks` is decremented while the mutex is held, so the completion invariant
-    is protected by exactly one mechanism (the mutex + condition variable).
-  - Remove any redundant double-check that reads the atomic outside the lock for the same
-    invariant.
-  - Add a test case: enqueue N tasks that sleep briefly, call `wait_all`, then assert that
-    all N results have been written.
-
-  **Why it matters:** Mixing an atomic counter and a mutex for the same invariant is fragile
-  and will produce hard-to-reproduce races when the captured state grows with ECS data.  
-  **Prerequisites:** FIX-03 (atomic `stop` must be correct first).
-
----
-
-- [x] **FIX-05: Fix `Model::get_bounding_sphere_radius` — returns a diameter, not a radius**
-
-  **File:** `engine/src/render/Model.cpp:103-104`  
-  **Source:** `doc/test_audit.md` Bug 4
-
-  - Replace the current formula with: `max over all vertices of |v - center|`, or conservatively
-    `std::sqrt(size.x*size.x + size.y*size.y + size.z*size.z) / 2.0f`.
-  - Add a unit test with a known AABB (e.g., unit cube centered at origin) and assert the
-    radius equals `sqrt(3)/2 ≈ 0.866`.
-
-  **Why it matters:** The chest viewer uses this value directly for scaling, producing a model
-  rendered at roughly half the correct size.  
-  **Prerequisites:** None.
-
----
-
-- [x] **FIX-06: Guard `Texture::sample8` against zero-dimension textures**
-
-  **File:** `engine/src/render/Texture.cpp:64`  
-  **Source:** `doc/test_audit.md` Bug 5
-
-  - Add `width > 0 && height > 0` to `Texture::is_valid()`.
-  - Add a test: construct a `Texture` with width = 0, call `is_valid()`, assert it returns false,
-    and assert that `sample8` is not reachable on an invalid texture.
-
-  **Why it matters:** `width - 1` wraps to `INT_MAX` when `width == 0`, passing an out-of-bounds
-  index to the AVX2 gather and causing undefined behaviour.  
-  **Prerequisites:** None.
-
----
-
-- [x] **FIX-07: Add explicit parentheses to Rasterizer tile-rejection expression**
-
-  **File:** `engine/include/retro3d/render/Rasterizer.h:111`  
-  **Source:** `doc/test_audit.md` Bug 6
-
-  - Rewrite `a * (TILE_SIZE-1) << SUBPIXEL_SHIFT` as `(a * (TILE_SIZE - 1)) << SUBPIXEL_SHIFT`.
-  - No behaviour change — this is a readability and refactoring-safety fix only.
-
-  **Why it matters:** The lack of parentheses makes the expression fragile under future edits;
-  any reordering could silently change operator precedence.  
-  **Prerequisites:** None.
-
----
-
-- [x] **FIX-08: Replace `GLOB_RECURSE` with explicit source lists in CMakeLists.txt**
-
-  **File:** `engine/CMakeLists.txt`  
-  **Source:** `doc/architecture_audit.md` Risk 7 / Rec 9
-
-  - Replace the `file(GLOB_RECURSE ENGINE_SOURCES ...)` call with an explicit
-    `add_library(Retro3D STATIC ...)` listing each `.cpp` file by name
-    (see the exact list in `doc/architecture_audit.md` Rec 9).
-  - Verify a clean build after the change.
-
-  **Why it matters:** `GLOB_RECURSE` does not re-run CMake when new source files are added,
-  causing silent missing-file build failures.  
+  **Why it matters:** The mismatch is a latent correctness defect — safe today because stb
+  defaults to `malloc`/`free`, but will silently become heap corruption if the stb allocator
+  is ever customised.  
   **Prerequisites:** None.
 
 ---
