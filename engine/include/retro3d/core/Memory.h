@@ -7,7 +7,8 @@
 
 #include <retro3d/core/Math.h>
 
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 #include <new>
@@ -66,7 +67,14 @@ private:
         uintptr_t aligned_addr = (raw_addr + alignment - 1) & ~(alignment - 1);
         uint64_t padding = aligned_addr - raw_addr;
 
-        assert(current + padding + size <= memory_bloc.size);
+        if (current + padding + size > memory_bloc.size) {
+            std::fprintf(stderr,
+                "[Arena] Overflow: requested %llu bytes, %llu bytes available\n",
+                (unsigned long long)size,
+                (unsigned long long)(memory_bloc.size > current + padding
+                                     ? memory_bloc.size - current - padding : 0));
+            std::abort();
+        }
 
         std::byte* data = reinterpret_cast<std::byte*>(aligned_addr);
         current += padding + size;

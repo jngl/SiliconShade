@@ -16,7 +16,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-01: Harden Arena overflow guard for Release builds**
+- [x] **FIX-01: Harden Arena overflow guard for Release builds**
 
   **File:** `engine/include/retro3d/core/Memory.h:69`  
   **Source:** `doc/test_audit.md` Bug 2 / `doc/architecture_audit.md` Rec 8
