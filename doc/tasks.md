@@ -128,7 +128,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-08: Replace `GLOB_RECURSE` with explicit source lists in CMakeLists.txt**
+- [x] **FIX-08: Replace `GLOB_RECURSE` with explicit source lists in CMakeLists.txt**
 
   **File:** `engine/CMakeLists.txt`  
   **Source:** `doc/architecture_audit.md` Risk 7 / Rec 9

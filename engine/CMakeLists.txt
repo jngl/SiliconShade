@@ -1,11 +1,16 @@
 # --- Library Target (The Core Engine) ---
-file(GLOB_RECURSE ENGINE_SOURCES 
-    "src/core/*.cpp"
-    "src/render/*.cpp"
-    "src/external/*.cpp"
+add_library(Retro3D STATIC
+    src/core/App.cpp
+    src/core/Engine.cpp
+    src/core/Input.cpp
+    src/core/Memory.cpp
+    src/core/ThreadPool.cpp
+    src/render/Draw.cpp
+    src/render/Model.cpp
+    src/render/Texture.cpp
+    src/external/stb_impl.cpp
+    src/external/tinyobj_impl.cpp
 )
-
-add_library(Retro3D STATIC ${ENGINE_SOURCES})
 
 target_include_directories(Retro3D 
     PUBLIC 
