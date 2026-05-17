@@ -1,0 +1,2 @@
+- [Retro3D task list](project_retro3d.md) — consolidated doc/tasks.md generated 2026-05-17; covers 8 bug fixes, Phase 1-6 tasks, 3 CI tasks; includes prerequisite chains
+- [Retro3D audit summary](project_retro3d_audit_summary.md) — key findings from test and architecture audits: 7 bugs, ~18% coverage, 6 architectural risks
