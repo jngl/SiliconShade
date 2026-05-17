@@ -3,6 +3,8 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 
 Texture::Texture(const char* path) {
     data = stbi_load(path, &width, &height, &channels, 4);
@@ -26,6 +28,15 @@ Texture::Texture(const char* path) {
     }
 }
 
+Texture::Texture(const unsigned char* pixels, int w, int h)
+    : width(w), height(h), channels(4) {
+    if (pixels && w > 0 && h > 0) {
+        size_t sz = static_cast<size_t>(w) * h * 4;
+        data = static_cast<unsigned char*>(std::malloc(sz));
+        if (data) std::memcpy(data, pixels, sz);
+    }
+}
+
 Texture::~Texture() {
     if (data) {
         stbi_image_free(data);
@@ -33,7 +44,7 @@ Texture::~Texture() {
 }
 
 uint32_t Texture::sample(float u, float v) const {
-    if (!data) return 0xFFFFFFFF;
+    if (!is_valid()) return 0xFFFFFFFF;
 
     // Wrap-around
     float u_wrapped = u - std::floor(u);
@@ -47,7 +58,7 @@ uint32_t Texture::sample(float u, float v) const {
 }
 
 __m256i Texture::sample8(__m256 u, __m256 v) const {
-    if (!data) return _mm256_set1_epi32(0xFFFFFFFF);
+    if (!is_valid()) return _mm256_set1_epi32(0xFFFFFFFF);
 
     // Wrap-around: u - floor(u)
     u = _mm256_sub_ps(u, _mm256_floor_ps(u));

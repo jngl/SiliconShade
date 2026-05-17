@@ -6,17 +6,17 @@
 
 class Texture {
 public:
-    Texture(const char* path);
+    explicit Texture(const char* path);
+    Texture(const unsigned char* pixels, int w, int h);
     ~Texture();
 
-    // Empêcher la copie pour éviter les doubles free
     Texture(const Texture&) = delete;
     Texture& operator=(const Texture&) = delete;
 
     uint32_t sample(float u, float v) const;
     __m256i sample8(__m256 u, __m256 v) const;
 
-    bool is_valid() const { return data != nullptr; }
+    bool is_valid() const { return data != nullptr && width > 0 && height > 0; }
     int get_width() const { return width; }
     int get_height() const { return height; }
 

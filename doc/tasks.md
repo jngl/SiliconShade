@@ -99,7 +99,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-06: Guard `Texture::sample8` against zero-dimension textures**
+- [x] **FIX-06: Guard `Texture::sample8` against zero-dimension textures**
 
   **File:** `engine/src/render/Texture.cpp:64`  
   **Source:** `doc/test_audit.md` Bug 5
