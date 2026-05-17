@@ -1,6 +1,6 @@
 # Architecture Audit — Retro3D Engine
 
-**Date:** 2026-05-17
+**Date:** 2026-05-17 (updated — Section 0 fixes applied)
 **Auditor:** game-engine-architect agent
 **Scope:** Full codebase — engine library, examples, build system, roadmap alignment
 **Cross-reference:** See `doc/test_audit.md` for the companion test-pyramid audit.
@@ -11,7 +11,11 @@
 
 Retro3D is a well-scoped, early-stage software rasterizer with a clear vision. The foundation — an arena allocator, a tile-based AVX2 rasterizer, and a template-driven shader interface — is technically solid and demonstrates real performance awareness. The Engine subclass pattern is ergonomic for demos.
 
-However, six architectural decisions made at this stage will become increasingly painful as the project moves from Phase 1 toward Phase 3 (BSP) and Phase 4 (physics, MD2). The most serious are: the Arena allocator lacks the lifecycle controls the roadmap requires, the rasterizer lives entirely in a header which makes it expensive to build and impossible to test in isolation, the `Model` and `Texture` types are incompatible with the planned resource cache, and the `App` class hard-codes resolution at compile time. None of these require a rewrite — they require targeted, planned refactoring before the next phase begins.
+All eight Section-0 correctness defects identified in the original audit have been resolved. The arena overflow guard now fires unconditionally in Release builds. `ThreadPool` synchronization is race-free. `Texture::is_valid()` correctly rejects zero-dimension inputs. The bounding sphere radius formula is exact. The CMake build uses explicit source lists.
+
+One new defect was identified during the post-fix test re-read (see `doc/test_audit.md` Bug 2): the rasterizer tile x-loop applies a right-boundary pixel mask but no left-boundary mask, meaning pixels at column positions left of `screen_aabb.min.x` can be emitted by the fragment shader when the first tile of a row starts below the AABB boundary. This is an active out-of-bounds write risk.
+
+Five architectural decisions made at this stage will become increasingly painful as the project moves from Phase 1 toward Phase 3 and Phase 4. The most serious are: the Arena lacks the lifecycle controls the roadmap requires, the per-triangle thread dispatch cannot meet the 60 FPS target at scene scale, the `Model` and `Texture` types are incompatible with the planned resource cache, and the `App` class hard-codes resolution at compile time. None of these require a rewrite — they require targeted, planned refactoring before the next phase begins.
 
 ---
 
@@ -44,11 +48,11 @@ However, six architectural decisions made at this stage will become increasingly
     └─> immintrin.h
 
 [Math.h]         (no engine dependencies — correct)
-[Memory.h]       (depends on Math.h — questionable, see §1.3)
+[Memory.h]       (depends on Math.h — unnecessary coupling, see §1.3)
 [Basic.h]        (pure macros — correct)
 ```
 
-The dependency graph is largely acyclic and layered correctly. Third-party headers (`stb_image.h`, `tiny_obj_loader.h`) are correctly isolated to implementation translation units under `src/external/`, avoiding contamination of the public API. This is one of the best practices in the codebase.
+The dependency graph is largely acyclic and layered correctly. Third-party headers (`stb_image.h`, `tiny_obj_loader.h`) are correctly isolated to implementation translation units under `src/external/`, avoiding contamination of the public API. The engine CMakeLists.txt now uses an explicit source list (FIX-08), eliminating the silent-missing-file failure mode.
 
 ### 1.2 Separation of Concerns
 
@@ -83,12 +87,12 @@ The dependency graph is largely acyclic and layered correctly. Third-party heade
 The tile-based AVX2 rasterizer in `Rasterizer.h` is technically the most mature piece of the engine. Key strengths:
 
 - **Fixed-point subpixel coordinates** with `SUBPIXEL_SHIFT = 4` give correct sub-pixel rasterization without floating-point edge function evaluation.
-- **Tile rejection** via the conservative covering test avoids invoking the per-pixel SIMD path for fully-outside tiles, which is critical for scene-scale triangle counts.
+- **Tile rejection** via the conservative covering test avoids invoking the per-pixel SIMD path for fully-outside tiles. The parenthesization of the tile-rejection expression is now explicit — `(a * (TILE_SIZE - 1)) << SUBPIXEL_SHIFT` — eliminating operator-precedence fragility (FIX-07).
 - **Template shader protocol** (`VS`, `FS` callables + `TVarying` parameter) achieves zero-cost abstraction — the compiler inlines both shaders into the loop body, and the varying type is a compile-time parameter that allows SoA-style data access patterns per invocation.
 - **Incremental edge stepping** (addition, not recomputation) is the correct approach for inner loops.
-- **SIMD gather for texture sampling** (`_mm256_i32gather_epi32`) in `Texture::sample8` correctly processes 8 texels in parallel.
+- **SIMD gather for texture sampling** (`_mm256_i32gather_epi32`) in `Texture::sample8` correctly processes 8 texels in parallel and is now guarded by `is_valid()` (FIX-06).
 
-### 2.2 The Rasterizer: Critical Performance Issues
+### 2.2 The Rasterizer: Critical Performance and Correctness Issues
 
 **Issue 1: Per-triangle thread dispatch (dominant bottleneck at scale)**
 
@@ -123,7 +127,27 @@ for (int32_t y = ty; y < ty + TILE_SIZE; ++y) {
 
 This check fires on every row of every tile that partially overlaps the triangle's vertical bounds. For `TILE_SIZE = 8`, up to 7 out of 8 rows may be skipped, making this a nearly unconditional branch in the inner loop. The correct fix is to start the tile iteration at `max(tile_min_y, min_y)` and end at `min(tile_max_y, max_y)` — no per-row check needed.
 
-**Issue 4: Perspective-divide encoding and precision**
+**Issue 4: Missing left-boundary pixel mask (new — from `doc/test_audit.md` Bug 2)**
+
+```cpp
+// Rasterizer.h:100
+for (int32_t tx = min_x & ~(TILE_SIZE - 1); tx <= max_x; tx += TILE_SIZE) {
+```
+
+The tile x-loop starts at `min_x & ~(TILE_SIZE - 1)`, which rounds `min_x` down to the nearest tile boundary. The first tile may therefore start up to 7 pixels left of `min_x`. A right-boundary mask is applied when `tx + 7 > max_x` (line 138), but there is no equivalent left-boundary mask for when `tx < min_x`. For a triangle whose leftmost vertex is inside the screen AABB but whose tile starts to the left of it, pixels at columns `tx` through `min_x - 1` are screened only by the edge-function sign. If any such pixel is interior to the triangle (all edge functions non-negative), the fragment shader is invoked with an x-coordinate below `screen_aabb.min.x`, potentially writing to an out-of-bounds buffer position.
+
+Fix: apply a symmetric left-boundary mask immediately after the edge-function mask is computed:
+
+```cpp
+if (tx < min_x) {
+    int left_mask = ~((1 << (min_x - tx)) - 1) & 0xFF;
+    mask &= left_mask;
+}
+```
+
+The existing AABB Clipping test should also be extended to assert that zero pixels are written outside the clip region, not merely that the expected pixel count is written inside it.
+
+**Issue 5: Perspective-divide encoding and precision**
 
 In `chest_viewer/main.cpp`:
 
@@ -132,19 +156,26 @@ out.inv_w = (int32_t)((1.0f / view_p.z) * (1 << 24));
 out.varying.u_pw = (int32_t)((v.texcoord.x * (float)out.inv_w));
 ```
 
-`inv_w` is stored as a fixed-point Q8.24 value in an `int32_t`. The barycentric interpolation of `inv_w` in the fragment shader then uses `_mm256_cvtepi32_ps` on the raw integer representation, treating fixed-point bits as a float. The depth comparison (`v_new_depth > v_current_depth`) compares these Q8.24 fixed-point integers, which is correct. But the perspective-correct UV division `u_pw / inv_w` divides two fixed-point values using float arithmetic — the numerator's scale (`1/z * uv`) and denominator's scale (`1/z`) cancel, which gives correct UV coordinates. This is subtle and correct, but it needs a comment explaining the invariant, because `out.varying.u_pw = u * inv_w` is not obvious. The correctness depends on the fact that `u_pw / inv_w = (u * inv_w) / inv_w = u`, with the fixed-point scale factors cancelling.
+`inv_w` is stored as a fixed-point Q8.24 value in an `int32_t`. The barycentric interpolation of `inv_w` in the fragment shader then uses `_mm256_cvtepi32_ps` on the raw integer representation, treating fixed-point bits as a float. The depth comparison (`v_new_depth > v_current_depth`) compares these Q8.24 fixed-point integers, which is correct. But the perspective-correct UV division `u_pw / inv_w` divides two fixed-point values using float arithmetic — the numerator's scale (`1/z * uv`) and denominator's scale (`1/z`) cancel, giving correct UV coordinates. This is subtle and correct, but the invariant needs a comment, because `u_pw = u * inv_w` is not self-documenting. The correctness depends on the fixed-point scale factors cancelling: `(u * inv_w) / inv_w = u`.
 
 ### 2.3 Memory Layout: Arena Usage
 
 The arena is allocated at 1 GiB in both examples (`SystemMemory app_memory(GIGABYTES(1))`). The only arena-managed memory is the color buffer and depth buffer in `App::App()` — approximately 3 MiB for 1024×768. The remaining 997 MiB is reserved but unused.
 
+The arena overflow guard (FIX-01) now calls `std::fprintf` + `std::abort()` unconditionally, surviving `-DNDEBUG`. The diagnostic prints the requested size and remaining capacity before aborting.
+
 More importantly, the `Arena::clear()` method resets the entire arena to offset 0. There is no marker or scope system. When the roadmap adds per-frame temporary allocations (Phase 1: "Arena Markers") alongside persistent allocations (loaded models, textures), the current `Arena` design cannot support both in the same arena without flushing the persistent data.
 
-Immediate consequence: `Model` and `Texture` are not arena-managed at all — they allocate via `std::vector` and `stbi_load` (malloc). This means the "zero allocation in the hot path" property is a half-truth: the render loop is clean, but asset loading and model destruction use the system allocator.
+`Model` and `Texture` are not arena-managed — they allocate via `std::vector` and `stbi_load` / `std::malloc`. The "zero allocation in the hot path" property is a half-truth: the render loop is clean, but asset loading and model destruction use the system allocator.
+
+**Note on `Texture` destructor:** The file-load constructor allocates via `stbi_load` (internally `malloc`) and the in-memory constructor (`Texture(const unsigned char*, int, int)`, added by FIX-06) allocates via `std::malloc`. The destructor calls `stbi_image_free(data)` unconditionally. This is safe as long as the default stb allocator is never overridden. If a custom `STBI_MALLOC` / `STBI_FREE` is ever defined, the in-memory path will call the wrong deallocator. The destructor should track the allocation path (a `bool owns_stbi` flag) and call the matching function.
 
 ### 2.4 Threading Model Assessment
 
-The `ThreadPool` is a standard work-stealing queue implementation, well-suited for background tasks. The identified bug in `test_audit.md` (non-atomic `stop` flag) is a real data race under TSan.
+The `ThreadPool` is a standard work-stealing queue implementation, well-suited for background tasks. The synchronization issues from the original audit have been resolved:
+
+- `stop` is now `std::atomic<bool>` with `memory_order_release` on write and `memory_order_acquire` on read inside the condition-variable predicate (FIX-03). The TSan race is gone.
+- `active_tasks` is now a plain `uint32_t` whose reads and writes are all guarded by `queue_mutex` (FIX-04). The mixed-synchronization invariant (atomic + mutex for the same variable) is eliminated.
 
 The threading model for rendering needs to change before Phase 2 (see §2.2 Issue 1). The thread-local arenas specified in Phase 1 of `PLAN.md` are also not supported by the current single-arena design.
 
@@ -154,7 +185,7 @@ The threading model for rendering needs to change before Phase 2 (see §2.2 Issu
 
 ### 3.1 Phase 1 — Math and Memory
 
-**Math (`Vec3f`, `Mat4`, `Quat`):** `Vec3f` exists. `Mat4` exists with `identity()`, `rotate_y()`, and `transform()`. Missing: full matrix multiply (required for view-projection pipeline), `look_at`, `perspective`, quaternion type, `Vec3f::normalize()`, `Vec3f::length()`. The current `Mat4::transform` drops the W component — it is not a full 4D transform, only a 3D affine transform. This works for the current examples but will break once a full MVP pipeline is required.
+**Math (`Vec3f`, `Mat4`, `Quat`):** `Vec3f` exists. `Mat4` exists with `identity()`, `rotate_y()`, and `transform()`. Missing: full matrix multiply (required for view-projection pipeline), `look_at`, `perspective`, quaternion type, `Vec3f::normalize()`, `Vec3f::length()`. The current `Mat4::transform` drops the W component — it is a 3D affine transform, not a full 4D transform. This works for the current examples but will break once a full MVP pipeline is required.
 
 **Memory Markers:** The `Arena` has `clear()` but no `get_marker()` / `restore_marker()`. This is a Phase 1 deliverable. Without markers, temporary per-frame allocations (e.g., a clipped polygon list during BSP traversal) cannot coexist with persistent allocations in the same arena.
 
@@ -162,13 +193,15 @@ The threading model for rendering needs to change before Phase 2 (see §2.2 Issu
 
 **Resource Cache:** `Model` and `Texture` each own their data directly with no reference counting or external ownership model. The planned `ResourceManager` (Phase 1) needs assets to be shareable and lifetime-managed. The current design requires refactoring both classes to use handles or shared ownership before the resource cache can be built.
 
+`Texture` now has a second constructor `Texture(const unsigned char*, int, int)` for in-memory construction (added by FIX-06). This is a prerequisite for BSP embedded textures and for test isolation. Move semantics are still absent — `Texture(Texture&&)` is not defined, limiting the ResourceManager's ability to store textures in a growable container.
+
 ### 3.2 Phase 2 — ECS and Renderer
 
-**ECS:** No ECS exists. The roadmap requires `World`, `Entity`, and component storage. The `Engine` subclass pattern is incompatible with ECS in its current form: `on_render()` is expected to contain imperative mesh-drawing code (as in `chest_viewer`), but a `RenderSystem` needs to iterate component arrays, not be called imperatively. The `Engine` interface will need an extension point for registering and running systems.
+**ECS:** No ECS exists. The roadmap requires `World`, `Entity`, and component storage. The `Engine` subclass pattern is incompatible with ECS in its current form: `on_render()` is expected to contain imperative mesh-drawing code (as in `chest_viewer`), but a `RenderSystem` needs to iterate component arrays. The `Engine` interface will need an extension point for registering and running systems.
 
-**Dynamic Resolution:** `App` hard-codes `WIN_WIDTH = 1024` and `WIN_HEIGHT = 768` as `constexpr int32_t` on the class. The color and depth buffers are sized at construction using these constants. The `screen_aabb` in the viewer is also constructed from these constants. Dynamic resolution requires: a runtime-specified buffer size, resizable arena allocations (or a separate allocator for frame buffers), and the AABB/viewport to reflect the current size. This is a non-trivial refactor across at least four files.
+**Dynamic Resolution:** `App` hard-codes `WIN_WIDTH = 1024` and `WIN_HEIGHT = 768` as `static constexpr int32_t` on the class. The color and depth buffers are sized at construction using these constants. The `screen_aabb` in the viewer is also constructed from these constants. Dynamic resolution requires: a runtime-specified buffer size, resizable arena allocations (or a separate allocator for frame buffers), and the AABB/viewport to reflect the current size. This is a non-trivial refactor across at least four files.
 
-**Frustum Clipping:** The rasterizer performs 2D scissoring (AABB intersection at screen space) but no 3D frustum clipping before perspective divide. Triangles that cross the near plane will produce incorrect results (z ≤ 0 in view space leads to a divide by a near-zero or negative value). The `chest_viewer` avoids this because the model is always placed at z = 600 with a fixed offset. For BSP traversal where the player can be at any position, near-plane clipping is required before the rasterization call.
+**Frustum Clipping:** The rasterizer performs 2D scissoring (AABB intersection at screen space) but no 3D frustum clipping before perspective divide. Triangles that cross the near plane will produce incorrect results (z ≤ 0 in view space leads to a divide by a near-zero or negative value). The `chest_viewer` avoids this because the model is always placed at z = 600. For BSP traversal where the player can approach any world geometry, near-plane clipping is required before the rasterization call.
 
 ### 3.3 Phase 3 — BSP
 
@@ -213,7 +246,7 @@ int main() {
 **Weaknesses:**
 - `on_init()` is a virtual function with a default empty implementation. If a subclass forgets to call a hypothetical base `on_init()` in the future (e.g., when the base class initializes the ECS `World`), there is no enforcement mechanism. Consider making `on_init()` non-virtual in the base and calling a protected `do_init()` virtual instead, or documenting the invariant.
 - `on_update` and `on_render` are both pure virtual, requiring every subclass to implement both. The `CryptCrawler` example has a trivial `on_render` that only clears buffers. A default `on_render` that clears the buffers (the overwhelmingly common case) would reduce boilerplate.
-- The `Engine` constructor silently falls through if `App::init()` fails — `m_app.init_success()` returns false and `run()` exits immediately. The `CryptCrawler` wraps `game.run()` in a `try/catch` but no exception is thrown on init failure. The `ChestViewer` does not even wrap it. Error reporting on failure is limited to `fprintf(stderr, ...)` inside `App`. This is acceptable for a demo engine but should be documented explicitly.
+- The `Engine` constructor silently falls through if `App::init()` fails — `m_app.init_success()` returns false and `run()` exits immediately. No exception is thrown on init failure. Error reporting on failure is limited to `fprintf(stderr, ...)` inside `App`. This is acceptable for a demo engine but should be documented explicitly.
 
 ### 4.2 Arena Allocator Contract
 
@@ -221,12 +254,12 @@ The `Arena::allocate<T>` function has a correct and useful design:
 - Alignment is respected.
 - Trivially-default-constructible types are zero-initialized via `memset` (not via the default constructor, which is correct).
 - Non-trivially-default-constructible types receive placement-new. The `static_assert(std::is_trivially_destructible_v<T>)` correctly prevents arenas from managing types with destructors, which would leak.
+- Overflow in Release builds now calls `std::fprintf` + `std::abort()` unconditionally, printing requested size and remaining capacity (FIX-01).
 
-**Gaps in the contract:**
+**Remaining gaps in the contract:**
 - No `push_scope()` / `pop_scope()` (markers). Calling code cannot separate temporary from persistent allocations in the same arena.
-- `allocate` asserts on overflow (Debug only — see `test_audit.md` Bug 2). In Release, overflow is undefined behavior via out-of-bounds write.
-- There is no `allocate_single<T>(args...)` convenience. The callsites read `arena.allocate<T>(1)` and then manually index `.data[0]`, which is error-prone.
-- `View<T>` is a raw span with no bounds checking. There is no debug-mode bounds-check path. Adding an `operator[]` with a `assert(i < size)` to `View<T>` would catch many indexing bugs at negligible cost.
+- There is no `allocate_single<T>(args...)` convenience. Call sites read `arena.allocate<T>(1)` and then manually index `.data[0]`, which is error-prone.
+- `View<T>` is a raw span with no bounds checking. There is no debug-mode bounds-check path. Adding an `operator[]` with `assert(i < size)` to `View<T>` would catch many indexing bugs at negligible cost.
 
 ### 4.3 Rasterizer Template Interface
 
@@ -260,10 +293,9 @@ To support dynamic resolution, `App` must be refactored to hold `int32_t width, 
 
 ### Risk 2 — Model and Texture are unmanaged heap resources [HIGH]
 
-`Texture` allocates with `stbi_load` (malloc). `Model` uses `std::vector` (heap). Neither is arena-managed. The planned `ResourceManager` (Phase 1) needs a stable address and a shareable lifetime for each asset. The current design means:
+`Texture` allocates with `stbi_load` (malloc) for file loads and with `std::malloc` for in-memory construction. `Model` uses `std::vector` (heap). Neither is arena-managed. The planned `ResourceManager` (Phase 1) needs a stable address and a shareable lifetime for each asset. The current design means:
 - Two `Texture` objects pointing at the same file will each load and store a separate copy.
-- There is no `Texture::Texture(Texture&&)` — move is implicitly deleted because copy is deleted and no move constructor is defined.
-- There is no way to construct a `Texture` from in-memory data (needed for BSP embedded textures and for testing).
+- There is no `Texture(Texture&&)` move constructor — move is not available because copy is deleted and no move constructor is defined.
 
 The resource cache will require either handle-based ownership (`ResourceHandle<Texture>` returning a `Texture*` or index into a pool) or shared pointers. **Design the ResourceManager before implementing the Model or Texture cache.**
 
@@ -287,19 +319,15 @@ This is currently safe because `chest_viewer` always places the model at z = 600
 
 `GEMINI.md` section 2 states: "No dynamic allocation (new/malloc) is permitted inside the render loop." `ThreadPool::enqueue(std::function<void()>)` performs a heap allocation for closures that exceed the SBO. The `draw_triangle` lambda exceeds the SBO. This violation is already present and will worsen as the captured state grows with ECS system data.
 
-### Risk 7 — `file(GLOB_RECURSE)` in engine CMakeLists.txt [LOW]
+### Risk 7 — Rasterizer tile loop missing left-boundary pixel mask [MEDIUM]
 
-```cmake
-file(GLOB_RECURSE ENGINE_SOURCES "src/core/*.cpp" "src/render/*.cpp" "src/external/*.cpp")
-```
-
-`GLOB_RECURSE` at configure time does not re-run CMake when new `.cpp` files are added to the source tree. A developer adding a new `.cpp` file must manually re-run `cmake ..` or touch `CMakeLists.txt`. This is a well-known CMake anti-pattern. **Use explicit source file lists.**
+As analyzed in §2.2 Issue 4, the tile x-loop starts below the AABB boundary on non-tile-aligned triangles. The fragment shader can be invoked with `x < screen_aabb.min.x`, writing to a buffer position that is out of bounds relative to the intended clip region. The right-boundary mask is applied correctly; the left-boundary mask is absent. **Fix before adding the multithreaded test path, since the out-of-bounds write is harder to observe in multi-threaded execution.**
 
 ---
 
 ## 6. Concrete Recommendations
 
-The recommendations are ordered by phase alignment: items that must be done before a given phase are tagged accordingly.
+The recommendations are ordered by phase alignment. Items resolved by Section 0 fixes have been removed.
 
 ### Rec 1 — Introduce Arena markers (required before Phase 1 completion)
 
@@ -377,48 +405,51 @@ class ResourceManager {
 };
 ```
 
-Textures and models are stored in flat arrays owned by the `ResourceManager`. Assets are deduped by path. Handles are stable and copyable. This replaces direct `Texture` and `Model` construction in game code.
+Textures and models are stored in flat arrays owned by the `ResourceManager`. Assets are deduped by path. Handles are stable and copyable. This replaces direct `Texture` and `Model` construction in game code. Also add `Texture(Texture&&)` move constructor to make storage in growable containers possible.
 
 ### Rec 7 — Add near-plane clipping before the rasterizer call (required before Phase 3)
 
 Implement Sutherland-Hodgman clipping against the near plane (`z > near_z`) before calling `draw_triangle`. A clipped triangle may produce 0, 1, or 2 output triangles. This can be done with a small fixed-size output array (no heap allocation). The arena marker pattern (Rec 1) supports this: allocate the clipped polygon list per-frame into the temporary arena region.
 
-### Rec 8 — Fix the Arena overflow guard (immediate)
+### Rec 8 — Add left-boundary pixel mask in the rasterizer tile x-loop (immediate correctness)
 
-Replace `assert(...)` with an unconditional failure that survives `NDEBUG`:
+Mirror the existing right-boundary mask with a left-boundary mask:
 
 ```cpp
-if (current + padding + size > memory_bloc.size) {
-    // In a game engine, arena overflow is a programming error,
-    // not a recoverable runtime condition.
-    std::fprintf(stderr, "Arena overflow: requested %zu, available %zu\n",
-                 (size_t)(padding + size),
-                 (size_t)(memory_bloc.size - current));
-    std::abort();
+// Existing right-boundary mask (Rasterizer.h:138-141):
+if (tx + 7 > max_x) {
+    int boundary_mask = (1 << (max_x - tx + 1)) - 1;
+    mask &= boundary_mask;
+}
+
+// Add symmetrically before it:
+if (tx < min_x) {
+    int left_mask = ~((1 << (min_x - tx)) - 1) & 0xFF;
+    mask &= left_mask;
 }
 ```
 
-This is identified as Bug 2 in `test_audit.md` and is a correctness issue in Release builds.
+Extend the AABB Clipping test case in `tests/test_engine.cpp` to assert that no pixels are written outside the clip region, not merely that the expected count is written inside it. This is the only way the test will detect the left-boundary regression.
 
-### Rec 9 — Replace GLOB_RECURSE with explicit source lists (immediate)
+### Rec 9 — Fix the Texture destructor allocation mismatch (deferred but tracked)
 
-```cmake
-# engine/CMakeLists.txt
-add_library(Retro3D STATIC
-    src/core/App.cpp
-    src/core/Engine.cpp
-    src/core/Input.cpp
-    src/core/Memory.cpp
-    src/core/ThreadPool.cpp
-    src/render/Draw.cpp
-    src/render/Model.cpp
-    src/render/Texture.cpp
-    src/external/stb_impl.cpp
-    src/external/tinyobj_impl.cpp
-)
+Track which allocation path owns `data` and call the matching deallocator:
+
+```cpp
+class Texture {
+    ...
+    bool m_owns_stbi = false;  // true if allocated via stbi_load, false if std::malloc
+};
+
+Texture::~Texture() {
+    if (data) {
+        if (m_owns_stbi) stbi_image_free(data);
+        else std::free(data);
+    }
+}
 ```
 
-New source files will then automatically trigger a CMake reconfigure via the dependency tracking on `CMakeLists.txt`.
+This is safe to defer until a custom `STBI_MALLOC` is introduced, but it should be tracked as it is a latent correctness defect.
 
 ### Rec 10 — Move the Rasterizer inner-loop y-bounds check outward (immediate, performance)
 
@@ -453,7 +484,20 @@ This removes a conditional branch from every row of every tile and simplifies th
 | ResourceManager / asset handles | Direct ownership, no cache | Phase 1 resource cache blocked | P1 |
 | Near-plane clipping | Absent | Phase 3 corruption when player near geometry | P2 |
 | Math.h / Geometry.h split | Mixed in one file | BSP phase adds types, file unmanageable | P2 |
-| Arena overflow in Release | assert stripped by NDEBUG | Silent OOB write | Immediate |
-| GLOB_RECURSE in CMake | Stale build on new .cpp | Developer confusion, silent missing files | Immediate |
-| Rasterizer y-bounds check | Inside inner loop | ~10% excess branch overhead | Deferred |
+| Rasterizer left-boundary mask | Missing | Out-of-bounds fragment shader invocation | Immediate |
+| Rasterizer y-bounds check | Inside inner loop | Branch overhead in SIMD inner loop | Deferred |
+| Texture destructor mismatch | stbi_image_free on malloc'd data | Latent heap corruption if stb allocator overridden | Deferred |
 | Memory.h includes Math.h | Unnecessary coupling | Minor but cascading compile dependency | Deferred |
+
+### Resolved Since Original Audit
+
+| Fix | Was | Now |
+|---|---|---|
+| FIX-01: Arena overflow guard | `assert` (stripped in Release) | `fprintf` + `abort()` unconditional |
+| FIX-02: `is_color_near` subtraction | Silent UB on `uint8_t` subtraction | Casts to `int` before `abs` |
+| FIX-03: `ThreadPool::stop` race | `bool` — data race under TSan | `std::atomic<bool>` with release/acquire |
+| FIX-04: `ThreadPool::active_tasks` synchronization | `std::atomic<uint32_t>` + mutex (mixed) | `uint32_t` under `queue_mutex` only |
+| FIX-05: Bounding sphere radius | Returns AABB half-diagonal (too large) | Exact `max\|v - center\|` over all vertices |
+| FIX-06: `Texture::is_valid()` and guards | Missing `width > 0 && height > 0` check | Full check; `sample`/`sample8` guarded; in-memory constructor added |
+| FIX-07: Rasterizer tile-rejection parentheses | `a * (TILE_SIZE-1) << SUBPIXEL_SHIFT` | `(a * (TILE_SIZE - 1)) << SUBPIXEL_SHIFT` |
+| FIX-08: CMake GLOB_RECURSE | Stale build on new `.cpp` | Explicit source list in `engine/CMakeLists.txt` |
