@@ -28,7 +28,7 @@ private:
     std::condition_variable wait_condition;
     
     std::atomic<uint32_t> active_tasks{0};
-    bool stop = false;
+    std::atomic<bool> stop{false};
 };
 
 #endif //INC_3D_TEST_THREADPOOL_H

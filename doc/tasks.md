@@ -49,7 +49,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-03: Make `ThreadPool::stop` atomic**
+- [x] **FIX-03: Make `ThreadPool::stop` atomic**
 
   **File:** `engine/src/core/ThreadPool.cpp`, `engine/include/retro3d/core/ThreadPool.h:30`  
   **Source:** `doc/test_audit.md` Bug 1

@@ -8,9 +8,9 @@ ThreadPool::ThreadPool(uint32_t num_threads) {
                 {
                     std::unique_lock<std::mutex> lock(this->queue_mutex);
                     this->condition.wait(lock, [this] {
-                        return this->stop || !this->tasks.empty();
+                        return this->stop.load(std::memory_order_acquire) || !this->tasks.empty();
                     });
-                    if (this->stop && this->tasks.empty()) return;
+                    if (this->stop.load(std::memory_order_acquire) && this->tasks.empty()) return;
                     task = std::move(this->tasks.front());
                     this->tasks.pop();
                 }
@@ -28,7 +28,7 @@ ThreadPool::ThreadPool(uint32_t num_threads) {
 ThreadPool::~ThreadPool() {
     {
         std::unique_lock<std::mutex> lock(queue_mutex);
-        stop = true;
+        stop.store(true, std::memory_order_release);
     }
     condition.notify_all();
     for (std::thread& worker : workers) {
