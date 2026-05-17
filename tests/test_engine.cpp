@@ -15,7 +15,9 @@ bool is_color_near(uint32_t color, uint8_t r, uint8_t g, uint8_t b, uint8_t tole
     uint8_t br = (color >> 16) & 0xFF;
     uint8_t bg = (color >> 8) & 0xFF;
     uint8_t bb = color & 0xFF;
-    return std::abs(br - r) <= tolerance && std::abs(bg - g) <= tolerance && std::abs(bb - b) <= tolerance;
+    return std::abs((int)br - (int)r) <= tolerance &&
+           std::abs((int)bg - (int)g) <= tolerance &&
+           std::abs((int)bb - (int)b) <= tolerance;
 }
 
 TEST_CASE("Rasterizer Operations") {

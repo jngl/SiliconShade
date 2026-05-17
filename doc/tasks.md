@@ -33,7 +33,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-02: Fix `is_color_near` signed/unsigned subtraction in test helper**
+- [x] **FIX-02: Fix `is_color_near` signed/unsigned subtraction in test helper**
 
   **File:** `tests/test_engine.cpp:16`  
   **Source:** `doc/test_audit.md` Bug 7
