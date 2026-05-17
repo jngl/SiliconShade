@@ -114,7 +114,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-07: Add explicit parentheses to Rasterizer tile-rejection expression**
+- [x] **FIX-07: Add explicit parentheses to Rasterizer tile-rejection expression**
 
   **File:** `engine/include/retro3d/render/Rasterizer.h:111`  
   **Source:** `doc/test_audit.md` Bug 6

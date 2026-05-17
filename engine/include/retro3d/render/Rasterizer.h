@@ -108,8 +108,8 @@ namespace Rasterizer {
 
                     // Test de rejet de tuile (AABB optimisé)
                     auto is_outside = [&](int32_t w, int32_t a, int32_t b) {
-                        return (w + std::max(0, a * (TILE_SIZE-1) << SUBPIXEL_SHIFT) 
-                                  + std::max(0, b * (TILE_SIZE-1) << SUBPIXEL_SHIFT)) < 0;
+                        return (w + std::max(0, (a * (TILE_SIZE - 1)) << SUBPIXEL_SHIFT)
+                                  + std::max(0, (b * (TILE_SIZE - 1)) << SUBPIXEL_SHIFT)) < 0;
                     };
 
                     if (is_outside(w0_base, a12, b12) || is_outside(w1_base, a20, b20) || is_outside(w2_base, a01, b01)) {
