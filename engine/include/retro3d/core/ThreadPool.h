@@ -27,7 +27,7 @@ private:
     std::condition_variable condition;
     std::condition_variable wait_condition;
     
-    std::atomic<uint32_t> active_tasks{0};
+    uint32_t active_tasks = 0;
     std::atomic<bool> stop{false};
 };
 

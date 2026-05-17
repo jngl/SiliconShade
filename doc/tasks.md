@@ -65,7 +65,7 @@ before any new feature work begins. None require architectural decisions.
 
 ---
 
-- [ ] **FIX-04: Fix `ThreadPool::wait_all` mixed synchronization invariant**
+- [x] **FIX-04: Fix `ThreadPool::wait_all` mixed synchronization invariant**
 
   **File:** `engine/src/core/ThreadPool.cpp:16-22, 48-53`  
   **Source:** `doc/test_audit.md` Bug 3
